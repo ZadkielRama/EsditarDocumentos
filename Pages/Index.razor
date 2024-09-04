@@ -1,0 +1,124 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Text.Json
+@using DocumentFormat.OpenXml.Packaging;
+@using DocumentFormat.OpenXml.Wordprocessing;
+@using System.IO;
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<PageTitle>Subir Documentos</PageTitle>
+
+<h3>Sube el contrato y el archivo JSON con las variables a modificar</h3>
+
+<!-- Formulario para subir el documento y el archivo JSON -->
+<label>Json</label>
+<InputFile OnChange="OnJsonFileChange" />
+<br />
+<label>Docx</label>
+<InputFile OnChange="OnDocxFileChange" />
+<br />
+
+
+@if (mensajeError != null)
+{
+    <p style="color:red">@mensajeError</p>
+}
+
+@if (!string.IsNullOrEmpty(procesadoContenido))
+{
+    <h3>Documento procesado. Se descargará automáticamente.</h3>
+}
+
+@code {
+    private IBrowserFile docxArchivoSubido;
+    private IBrowserFile jsonArchivoSubido;
+    private string procesadoContenido;
+    private string mensajeError;
+
+    // Evento para manejar el archivo .docx subido
+    private async Task OnDocxFileChange(InputFileChangeEventArgs e)
+    {
+        docxArchivoSubido = e.File;
+        await ProcesarArchivosSiAmbosSubidos();
+    }
+
+    // Evento para manejar el archivo JSON subido
+    private async Task OnJsonFileChange(InputFileChangeEventArgs e)
+    {
+        jsonArchivoSubido = e.File;
+        await ProcesarArchivosSiAmbosSubidos();
+    }
+
+    // Procesar los archivos cuando ambos hayan sido subidos
+    private async Task ProcesarArchivosSiAmbosSubidos()
+    {
+        if (docxArchivoSubido != null && jsonArchivoSubido != null)
+        {
+            try
+            {
+                // Leer el archivo JSON con las variables
+                var variables = await LeerJsonAsync(jsonArchivoSubido);
+
+                // Cargar el archivo .docx en un MemoryStream para poder modificarlo}
+                using var memoryStream = new MemoryStream();
+                await docxArchivoSubido.OpenReadStream().CopyToAsync(memoryStream);
+
+                // Hacer que el stream esté listo para ser leído desde el principio
+                memoryStream.Position = 0;
+
+                // Procesar el archivo .docx
+                await ProcesarDocumentoDocx(memoryStream, variables);
+
+                // Generar el archivo para descargar
+                await DescargarArchivoModificado(memoryStream, "contrato_modificado.docx");
+
+                procesadoContenido = "Documento procesado correctamente.";
+            }
+            catch (Exception ex)
+            {
+                mensajeError = $"Error al subir o procesar los archivos: {ex.Message}";
+            }
+        }
+    }
+
+    // Método para leer el archivo JSON con las variables
+    private async Task<Dictionary<string, string>> LeerJsonAsync(IBrowserFile jsonFile)
+    {
+        using var stream = jsonFile.OpenReadStream();
+        using var reader = new StreamReader(stream);
+        var jsonContent = await reader.ReadToEndAsync();
+        return JsonSerializer.Deserialize<Dictionary<string, string>>(jsonContent);
+    }
+
+    // Método para procesar el documento .docx y reemplazar las variables
+    private async Task ProcesarDocumentoDocx(Stream fileStream, Dictionary<string, string> variables)
+    {
+        // Utilizar el mismo stream que se pasa al método
+        using (var wordDoc = WordprocessingDocument.Open(fileStream, true))
+        {
+            var body = wordDoc.MainDocumentPart.Document.Body;
+            var textElements = body.Descendants<Text>();
+
+            foreach (var text in textElements)
+            {
+                foreach (var variable in variables)
+                {
+                    // Reemplazar cada variable en el formato @variable@
+                    if (text.Text.Contains($"@{variable.Key}@"))
+                    {
+                        text.Text = text.Text.Replace($"@{variable.Key}@", variable.Value);
+                    }
+                }
+            }
+            wordDoc.MainDocumentPart.Document.Save();
+        }
+        fileStream.Position = 0;
+    }
+    // Método para descargar el archivo modificado
+    private async Task DescargarArchivoModificado(MemoryStream stream, string fileName)
+    {
+        var base64 = Convert.ToBase64String(stream.ToArray());
+        await JS.InvokeVoidAsync("descargarArchivo", base64, fileName);
+    }
+}
